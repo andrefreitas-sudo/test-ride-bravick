@@ -1,0 +1,21 @@
+{
+  "name": "TEST RIDE BRAVICK",
+  "short_name": "Test Ride",
+  "description": "Test ride digital da BRAVICK Royal Enfield: CNH, termo, assinatura e envio por WhatsApp.",
+  "lang": "pt-BR",
+  "start_url": "./#/inicio",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f2ec",
+  "theme_color": "#211d18",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Novo test ride", "url": "./#/novo", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Test rides", "url": "./#/test-rides", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
