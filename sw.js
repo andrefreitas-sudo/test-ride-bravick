@@ -1,5 +1,5 @@
 // Service worker — guarda só a interface (nunca dados de clientes).
-const VERSAO = 'trb-v2';
+const VERSAO = 'trb-v3';
 const ARQUIVOS = [
   './', './index.html', './styles.css', './app.js', './config.js',
   './vendor/supabase.js', './vendor/jspdf.js', './vendor/xlsx.js',

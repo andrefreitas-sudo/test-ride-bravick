@@ -761,7 +761,8 @@
     const ROTULO = /CAT|HAB|REGISTRO|CPF|VALIDADE|EMISS|N[ºO°]?$/;
     const comNumero = linhas.filter((l) => (out.registro && l.includes(out.registro)) || /\d{3}[.,\s]?\d{3}[.,\s]?\d{3}\s?[-–—]\s?\d{2}/.test(l) || /CAT[.\s]*HAB|CATEGORIA/.test(l));
     for (const l of comNumero) {
-      const sobra = soLetras(l).split(' ').filter((p) => p && !ROTULO.test(p));
+      const rotCat = /CAT[.\s]*HAB|CATEGORIA/.test(l); // nessa linha, "ACC" e "PERMISSÃO" são rótulos, não a categoria
+      const sobra = soLetras(l).split(' ').filter((p) => p && !ROTULO.test(p) && !/^PERMISS/.test(p) && !(rotCat && p === 'ACC'));
       const achou = sobra.filter((p) => CAT.test(p));
       if (achou.length === 1 && sobra.length <= 2) { out.categoria = achou[0]; break; }
     }
@@ -771,13 +772,34 @@
       if (prox.length === 1 && CAT.test(prox[0])) out.categoria = prox[0];
     }
 
-    const CABECALHO = /REP[UÚ]BLICA|FEDERATIVA|BRASIL|MINIST|SECRETARIA|CARTEIRA|NACIONAL|HABILITA|DEPARTAMENTO|TR[AÂ]NSITO|DENATRAN|SENATRAN|TERRIT|V[AÁ]LIDA|NOME|FILIA|IDENTIDADE|ASSINATURA|PERMISS|REGISTRO|OBSERVA/;
-    const iData = linhas.findIndex((l) => /\d{2}\s?[\/.]\s?\d{2}\s?[\/.]\s?\d{4}/.test(l));
-    for (const l of linhas.slice(0, iData >= 0 ? iData : linhas.length)) {
-      if (/\d/.test(l) || CABECALHO.test(l)) continue;
-      const limpo = l.replace(/[^A-ZÀ-Ü\s]/g, ' ').replace(/\s+/g, ' ').trim();
-      const partes = limpo.split(' ').filter((p) => p.length >= 2);
-      if (partes.length >= 2 && limpo.length >= 8) { out.nome = partes.join(' ').slice(0, 120); break; }
+    // Nome: é a primeira informação do documento, logo abaixo do cabeçalho. No modelo novo a data da
+    // 1ª habilitação fica na mesma linha, então datas e números são descartados em vez de eliminar a linha.
+    const INSTITUCIONAL = /REP[UÚ]BLICA|FEDERATIVA|BRASIL|MINIST|SECRETARIA|CARTEIRA|NACIONAL|DEPARTAMENTO|TR[AÂ]NSITO|INFRAESTRUTURA|TRANSPORTES|CIDADES|DENATRAN|SENATRAN|DETRAN|DRIVER|LICENSE|PERMISO|CONDUC|TERRIT|V[AÁ]LIDA|ESTADO/;
+    const CAMPO = /FILIA|IDENTIDADE|EMISSOR|NASCIMENTO|VALIDADE|REGISTRO|CATEGORIA|PERMISS|OBSERVA|ASSINATURA|NACIONALIDADE|LOCAL|EMISS[AÃ]O|PORTADOR/;
+    const ROTULO_NOME = /^(NOME|SOBRENOME|SOCIAL|HABILITA[CÇ][AÃ]O|HABILITACAO|E)$/;
+    const UFS = /^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/;
+    const LIGA = /^(DA|DE|DO|DAS|DOS|E)$/;
+    const temData = (l) => /\d{2}\s?[\/.]\s?\d{2}\s?[\/.]\s?\d{4}/.test(l);
+    const temCPF = (l) => /\d{3}[.,\s]?\d{3}[.,\s]?\d{3}\s?[-–—]\s?\d{2}/.test(l);
+    const nomeDaLinha = (l) => {
+      if (INSTITUCIONAL.test(l)) return '';
+      let ps = l.replace(/[^A-ZÀ-Ü\s]/g, ' ').split(/\s+/).filter(Boolean);
+      while (ps.length && ROTULO_NOME.test(ps[0])) ps.shift();          // rótulo colado no início ("NOME E SOBRENOME ...")
+      while (ps.length && /^HABILITA/.test(ps[ps.length - 1])) ps.pop(); // "1ª HABILITAÇÃO" colado no fim
+      if (ps.some((x) => CAMPO.test(x))) return '';
+      if (temData(l) && ps.length && UFS.test(ps[ps.length - 1])) return ''; // "data, cidade, UF" é o local de nascimento
+      while (ps.length && ps[0].length === 1) ps.shift();               // ruído de leitura nas pontas
+      while (ps.length && (ps[ps.length - 1].length === 1 || LIGA.test(ps[ps.length - 1]))) ps.pop();
+      ps = ps.filter((x) => x.length >= 2);
+      const fortes = ps.filter((x) => x.length >= 3 && !LIGA.test(x));
+      return fortes.length >= 2 && ps.join('').length >= 8 ? ps.join(' ').slice(0, 120) : '';
+    };
+    const iFim = linhas.findIndex((l) => /FILIA/.test(l) || temCPF(l) || (out.registro && l.includes(out.registro)));
+    const topo = linhas.slice(0, iFim >= 0 ? iFim : Math.min(linhas.length, 10));
+    const iRot = topo.findIndex((l) => /\bNOME\b/.test(l) && !/FILIA|SOCIAL\s*$/.test(l));
+    for (const l of [...topo.slice(Math.max(0, iRot)), ...topo.slice(0, Math.max(0, iRot))]) {
+      const n = nomeDaLinha(l);
+      if (n) { out.nome = n; break; }
     }
     if (!out.cpf && !out.registro && !out.validade) out.nome = ''; // sem nenhum número de CNH, não é um documento confiável
     return out;
