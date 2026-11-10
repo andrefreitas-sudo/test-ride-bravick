@@ -95,6 +95,15 @@ returns boolean language sql stable security definer set search_path = public as
   ), false)
 $$;
 
+-- Lojas que o usuário enxerga, resolvidas de uma só vez por consulta
+create or replace function public.lojas_visiveis()
+returns uuid[] language sql stable security definer set search_path = public as $$
+  select case when p.perfil = 'master' or p.todas_lojas
+    then (select coalesce(array_agg(l.id), '{}') from public.lojas l)
+    else coalesce(p.lojas, '{}') end
+  from public.perfis p where p.id = auth.uid() and p.ativo
+$$;
+
 -- ---------------------------------------------------------------------
 -- 3. TEST RIDES
 -- ---------------------------------------------------------------------
@@ -152,6 +161,8 @@ create table if not exists public.test_rides (
 create index if not exists test_rides_criado_idx on public.test_rides (criado_em desc);
 create index if not exists test_rides_loja_idx on public.test_rides (loja_id);
 create index if not exists test_rides_autor_idx on public.test_rides (criado_por);
+create index if not exists test_rides_autor_data_idx on public.test_rides (criado_por, criado_em desc);
+create index if not exists test_rides_loja_data_idx on public.test_rides (loja_id, criado_em desc);
 
 -- Preenche número, loja e responsável no servidor (não confia no que vem do app)
 create or replace function public.test_ride_antes_inserir()
@@ -322,41 +333,58 @@ alter table public.contadores enable row level security;
 alter table public.test_rides enable row level security;
 alter table public.auditoria enable row level security;
 
+-- As funções de perfil vão entre parênteses como subconsulta — assim o Postgres as
+-- resolve UMA vez por consulta em vez de uma vez por linha (diferença enorme na lista).
 drop policy if exists ver on public.lojas;
-create policy ver on public.lojas for select to authenticated using (public.e_ativo());
+create policy ver on public.lojas for select to authenticated using ((select public.e_ativo()));
 drop policy if exists gerir on public.lojas;
-create policy gerir on public.lojas for all to authenticated using (public.e_master()) with check (public.e_master());
+create policy gerir on public.lojas for all to authenticated
+  using ((select public.e_master())) with check ((select public.e_master()));
 
 drop policy if exists ver on public.perfis;
-create policy ver on public.perfis for select to authenticated using (id = auth.uid() or public.e_gestor());
+create policy ver on public.perfis for select to authenticated
+  using (id = (select auth.uid()) or (select public.e_gestor()));
 drop policy if exists gerir on public.perfis;
-create policy gerir on public.perfis for update to authenticated using (public.e_master()) with check (public.e_master());
+create policy gerir on public.perfis for update to authenticated
+  using ((select public.e_master())) with check ((select public.e_master()));
 
 drop policy if exists ver on public.motos;
-create policy ver on public.motos for select to authenticated using (public.e_ativo());
+create policy ver on public.motos for select to authenticated using ((select public.e_ativo()));
 drop policy if exists gerir on public.motos;
 create policy gerir on public.motos for all to authenticated
-  using (public.e_gestor() and public.acessa_loja(loja_id))
-  with check (public.e_gestor() and public.acessa_loja(loja_id));
+  using ((select public.e_gestor()) and loja_id = any (coalesce((select public.lojas_visiveis()), '{}')))
+  with check ((select public.e_gestor()) and loja_id = any (coalesce((select public.lojas_visiveis()), '{}')));
 
 drop policy if exists ver on public.configuracoes;
-create policy ver on public.configuracoes for select to authenticated using (public.e_ativo());
+create policy ver on public.configuracoes for select to authenticated using ((select public.e_ativo()));
 drop policy if exists gerir on public.configuracoes;
-create policy gerir on public.configuracoes for all to authenticated using (public.e_master()) with check (public.e_master());
+create policy gerir on public.configuracoes for all to authenticated
+  using ((select public.e_master())) with check ((select public.e_master()));
 
 drop policy if exists ver on public.test_rides;
-create policy ver on public.test_rides for select to authenticated using (public.acessa_test_ride(test_rides));
+create policy ver on public.test_rides for select to authenticated using (
+  (select public.e_master())
+  or (criado_por = (select auth.uid()) and (select public.e_ativo()))
+  or ((select public.e_gestor()) and loja_id = any (coalesce((select public.lojas_visiveis()), '{}')))
+);
 drop policy if exists criar on public.test_rides;
 create policy criar on public.test_rides for insert to authenticated
-  with check (public.e_ativo() and public.acessa_loja(loja_id));
+  with check ((select public.e_ativo()) and loja_id = any (coalesce((select public.lojas_visiveis()), '{}')));
 drop policy if exists alterar on public.test_rides;
-create policy alterar on public.test_rides for update to authenticated
-  using (public.acessa_test_ride(test_rides)) with check (public.acessa_test_ride(test_rides));
+create policy alterar on public.test_rides for update to authenticated using (
+  (select public.e_master())
+  or (criado_por = (select auth.uid()) and (select public.e_ativo()))
+  or ((select public.e_gestor()) and loja_id = any (coalesce((select public.lojas_visiveis()), '{}')))
+) with check (
+  (select public.e_master())
+  or (criado_por = (select auth.uid()) and (select public.e_ativo()))
+  or ((select public.e_gestor()) and loja_id = any (coalesce((select public.lojas_visiveis()), '{}')))
+);
 drop policy if exists excluir on public.test_rides;
-create policy excluir on public.test_rides for delete to authenticated using (public.e_master());
+create policy excluir on public.test_rides for delete to authenticated using ((select public.e_master()));
 
 drop policy if exists ver on public.auditoria;
-create policy ver on public.auditoria for select to authenticated using (public.e_master());
+create policy ver on public.auditoria for select to authenticated using ((select public.e_master()));
 
 -- ---------------------------------------------------------------------
 -- 7. ARQUIVOS (CNH e termos) — buckets privados

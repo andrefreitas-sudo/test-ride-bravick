@@ -7,7 +7,7 @@
   const C = window.TRB_CONFIG || {};
   const NOME_APP = 'TEST RIDE BRAVICK';
   const root = document.getElementById('root');
-  const S = { me: null, lojas: [], motos: [], config: {}, ultimaAtividade: Date.now() };
+  const S = { me: null, lojas: [], motos: [], config: {}, rides: null, ridesEm: 0, ultimaAtividade: Date.now() };
   let sb = null;
   let W = null; // test ride em andamento (assistente)
 
@@ -195,18 +195,27 @@
   }
 
   async function carregarSessao(msg) {
-    const { data } = await sb.auth.getUser().catch(() => ({ data: {} }));
-    if (!data?.user) return telaLogin(msg);
-    const { data: me, error } = await sb.from('perfis').select('*').eq('id', data.user.id).maybeSingle();
-    if (error || !me || !me.ativo) {
+    const { data } = await sb.auth.getSession().catch(() => ({ data: {} }));
+    const uid = data?.session?.user?.id;
+    if (!uid) return telaLogin(msg);
+    // Perfil e cadastros em paralelo: uma única ida ao servidor
+    const [p, l, m, cf] = await Promise.all([
+      sb.from('perfis').select('*').eq('id', uid).maybeSingle(),
+      sb.from('lojas').select('*').order('nome'),
+      sb.from('motos').select('*').order('modelo'),
+      sb.from('configuracoes').select('*'),
+    ]);
+    const me = p.data;
+    if (p.error || !me || !me.ativo) {
       await sb.auth.signOut();
-      return telaLogin(error ? erroAmigavel(error) : 'Seu acesso não está ativo. Fale com o administrador do sistema.');
+      return telaLogin(p.error ? erroAmigavel(p.error) : 'Seu acesso não está ativo. Fale com o administrador do sistema.');
     }
     S.me = me;
     S.ultimaAtividade = Date.now();
     sb.rpc('registrar_acesso').then(() => {});
     if (me.deve_trocar_senha) return telaTrocarSenha(true);
-    await carregarCadastros();
+    S.lojas = l.data || []; S.motos = m.data || [];
+    S.config = Object.fromEntries((cf.data || []).map((x) => [x.chave, x.valor]));
     montarApp();
   }
 
@@ -334,6 +343,9 @@
     if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
     else rotear();
     setTimeout(retencaoAutomatica, 4000);
+    // Adianta o download do motor de leitura logo após entrar, para o primeiro test ride não esperar.
+    // Respeita quem pediu economia de dados no aparelho.
+    if (S.config.leitura_ia !== true && !navigator.connection?.saveData) setTimeout(() => prepararOCR().catch(() => {}), 2500);
   }
 
   async function sair() {
@@ -376,11 +388,17 @@
   // ------------------------------------------------------------------ dados
   const COLS_LISTA = 'id,numero,status,loja_id,loja_nome,vendedor_id,vendedor_nome,moto_modelo,moto_placa,cliente_nome,cliente_cpf,cliente_telefone,cliente_email,cnh_numero,cnh_categoria,cnh_validade,saida_em,criado_em,whatsapp_enviado_em';
 
-  async function buscarRides() {
+  const VALIDADE_CACHE = 60000; // 1 min: trocar de tela não busca tudo de novo
+
+  async function buscarRides(forcar) {
+    if (!forcar && S.rides && Date.now() - S.ridesEm < VALIDADE_CACHE) return S.rides;
     const { data, error } = await sb.from('test_rides').select(COLS_LISTA).order('criado_em', { ascending: false }).limit(3000);
     if (error) throw error;
-    return data || [];
+    S.rides = data || []; S.ridesEm = Date.now();
+    return S.rides;
   }
+
+  const limparCacheRides = () => { S.rides = null; };
 
   const chipStatus = (r) => (r.status === 'cancelado' ? '<span class="chip bad">Cancelado</span>' : '<span class="chip ok">Concluído</span>');
 
@@ -393,7 +411,7 @@
 
   // ------------------------------------------------------------------ painel
   async function telaPainel() {
-    carregando();
+    if (!S.rides) carregando();
     let rs;
     try { rs = await buscarRides(); } catch (e) { return toast(erroAmigavel(e), true); }
     const validos = rs.filter((r) => r.status !== 'cancelado');
@@ -431,7 +449,7 @@
 
   // ------------------------------------------------------------------ lista
   async function telaLista(params) {
-    carregando();
+    if (!S.rides) carregando();
     let rs;
     try { rs = await buscarRides(); } catch (e) { return toast(erroAmigavel(e), true); }
     const vendedores = [...new Set(rs.map((r) => r.vendedor_nome).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -694,20 +712,52 @@
   }
 
   // ------------------------------------------------------------------ leitura da CNH no próprio aparelho (OCR, sem IA)
-  let ocr = null;
-  async function reconhecer(canvas) {
-    await carregarScript('vendor/tesseract/tesseract.min.js');
-    if (!ocr) {
-      const base = new URL('vendor/tesseract/', location.href.split('#')[0]).href;
-      ocr = await window.Tesseract.createWorker('por', 1, { workerPath: base + 'worker.min.js', corePath: base, langPath: base, workerBlobURL: false, gzip: true });
+  let ocr = null, ocrPreparando = null;
+
+  // Alguns aparelhos antigos não têm SIMD; para esses existe uma versão alternativa do motor.
+  function arquivoMotor(base) {
+    let simd = false;
+    try {
+      simd = WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+    } catch (_) { /* sem SIMD */ }
+    return base + (simd ? 'tesseract-core-simd-lstm.js' : 'tesseract-core-lstm.js');
+  }
+
+  // Baixa e liga o motor de leitura. Chamado assim que a tela da CNH abre, enquanto o
+  // vendedor ainda está tirando a foto — na segunda vez já está pronto no aparelho.
+  function prepararOCR() {
+    if (ocr) return Promise.resolve(ocr);
+    if (!ocrPreparando) {
+      ocrPreparando = (async () => {
+        await carregarScript('vendor/tesseract/tesseract.min.js');
+        const base = new URL('vendor/tesseract/', location.href.split('#')[0]).href;
+        ocr = await window.Tesseract.createWorker('por', 1, {
+          workerPath: base + 'worker.min.js', corePath: arquivoMotor(base), langPath: base,
+          workerBlobURL: false, gzip: true,
+          logger: (m) => {
+            if (!W || !W.lendo) return;
+            const pct = Math.round((m.progress || 0) * 100);
+            const fase = /recognizing/i.test(m.status) ? 'Lendo a CNH' : 'Preparando a leitura';
+            W.passoLeitura = pct > 0 && pct < 100 ? `${fase}… ${pct}%` : `${fase}…`;
+            const el = document.getElementById('status-leitura');
+            if (el) el.textContent = W.passoLeitura;
+          },
+        });
+        return ocr;
+      })().catch((e) => { ocrPreparando = null; throw e; });
     }
-    const { data } = await ocr.recognize(canvas);
+    return ocrPreparando;
+  }
+
+  async function reconhecer(canvas) {
+    const motor = await prepararOCR();
+    const { data } = await motor.recognize(canvas);
     return data.text || '';
   }
 
   // Tons de cinza com contraste reforçado: reduz o fundo de segurança da CNH
   function prepararParaLeitura(img, giro) {
-    const max = 2200, esc_ = Math.min(1, max / Math.max(img.width, img.height));
+    const max = 1800, esc_ = Math.min(1, max / Math.max(img.width, img.height));
     const w = Math.round(img.width * esc_), h = Math.round(img.height * esc_);
     const c = document.createElement('canvas'), deitado = giro === 90 || giro === 270;
     c.width = deitado ? h : w; c.height = deitado ? w : h;
@@ -824,6 +874,7 @@
     const ls = minhasLojas();
     let ultima = ''; try { ultima = localStorage.getItem('trb-loja') || ''; } catch (_) { /* sem armazenamento */ }
     return { passo: 1, loja_id: (ls.find((l) => l.id === ultima) || ls[0])?.id || '', cnh: null, lendo: false, erroLeitura: '', lidos: [], leuIA: false,
+      passoLeitura: '',
       f: { moto_id: '', nome: '', cpf: '', telefone: '', email: '', nascimento: '', registro: '', categoria: '', validade: '' },
       tempo: null, limite: null, ciente: false, sigCliente: [], sigResp: [], ride: null, pdfBlob: null };
   }
@@ -855,7 +906,7 @@
           ${W.cnh ? (pdf ? `<div class="ph" style="color:#fff">${I.doc}<b>${esc(W.cnh.nome)}</b><br><small style="color:#ddd">PDF anexado</small></div>` : `<img src="${W.cnh.dataUrl}" alt="CNH do cliente">`)
             : `<div class="ph">${I.camera}<b>CNH do cliente</b><br><small>Boa luz, sem reflexo, documento inteiro na foto</small></div>`}
           ${W.cnh && !W.lendo ? '<button class="x" data-tirar aria-label="Remover foto">×</button>' : ''}
-          ${W.lendo ? '<div class="busy"><div><div class="spin"></div>Lendo a CNH…<br><small class="muted" style="font-weight:400">Pode levar alguns segundos</small></div></div>' : ''}
+          ${W.lendo ? `<div class="busy"><div><div class="spin"></div><span id="status-leitura">${esc(W.passoLeitura || 'Lendo a CNH…')}</span><br><small class="muted" style="font-weight:400">Na primeira vez o aparelho baixa a leitura automática</small></div></div>` : ''}
         </div>
         ${W.erroLeitura ? `<div class="banner warn">${I.alert}<div>${esc(W.erroLeitura)}</div></div>` : ''}
         ${W.cnh && !W.lendo ? `<div class="actions"><button class="btn primary lg" style="flex:1" data-seguir>${W.leuIA ? 'Conferir dados' : 'Preencher os dados'} ${I.next}</button>${!W.leuIA ? `<button class="btn" data-reler>Ler de novo</button>` : ''}</div>`
@@ -866,6 +917,7 @@
         <small class="muted">A foto fica guardada por ${parseInt(S.config.retencao_cnh_dias, 10) || 45} dias e depois é apagada automaticamente.</small>
       </div></div>`;
     on(view(), 'input[name=loja]', 'change', (e) => { W.loja_id = e.target.value; W.f.moto_id = ''; W.tempo = null; W.limite = null; });
+    if (S.config.leitura_ia !== true) prepararOCR().catch(() => {}); // adianta o download enquanto a foto é tirada
     on(view(), '[data-cam]', 'click', () => $('#in-cam').click());
     on(view(), '[data-arq]', 'click', () => $('#in-arq').click());
     on(view(), '[data-tirar]', 'click', () => { W.cnh = null; W.erroLeitura = ''; W.leuIA = false; W.lidos = []; passoCNH(); });
@@ -885,7 +937,7 @@
 
   async function lerCNH() {
     const w = W;
-    w.lendo = true; w.erroLeitura = ''; w.leuIA = false; w.lidos = [];
+    w.lendo = true; w.erroLeitura = ''; w.leuIA = false; w.lidos = []; w.passoLeitura = '';
     passoCNH();
     try {
       const pdf = w.cnh.tipo === 'application/pdf', ia = S.config.leitura_ia === true;
@@ -1060,6 +1112,7 @@
       }).select().single();
       if (error) throw error;
       W.ride = data;
+      limparCacheRides();
       try { localStorage.setItem('trb-loja', data.loja_id); } catch (_) { /* sem armazenamento */ }
     }
     const id = W.ride.id;
@@ -1188,6 +1241,7 @@
         if (e1) throw e1;
         const { error: e2 } = await sb.from('test_rides').update({ termo_arquivo: caminho }).eq('id', r.id);
         if (e2) throw e2;
+        limparCacheRides();
         toast('Termo gerado.'); telaRide(id);
       } catch (err) { solta(); toast(erroAmigavel(err), true); }
     });
@@ -1221,6 +1275,7 @@
         const solta = travar($('button[type=submit]', f), 'Salvando…');
         const { error: e1 } = await sb.from('test_rides').update({ cliente_telefone: f.telefone.value, cliente_email: email || null }).eq('id', r.id);
         if (e1) { solta(); return toast(erroAmigavel(e1), true); }
+        limparCacheRides();
         m.fechar(); toast('Contato atualizado.'); telaRide(id);
       });
     });
@@ -1237,6 +1292,7 @@
         const solta = travar($('button[type=submit]', f), 'Salvando…');
         const { error: e1 } = await sb.from('test_rides').update({ status: 'cancelado', motivo_cancelamento: motivo }).eq('id', r.id);
         if (e1) { solta(); return toast(erroAmigavel(e1), true); }
+        limparCacheRides();
         m.fechar(); toast('Test ride cancelado.'); telaRide(id);
       });
     });
@@ -1247,6 +1303,7 @@
         if (r.termo_arquivo) await sb.storage.from('termos').remove([r.termo_arquivo]);
         const { error: e1 } = await sb.from('test_rides').delete().eq('id', r.id);
         if (e1) throw e1;
+        limparCacheRides();
         toast('Registro excluído.'); location.hash = '#/test-rides';
       } catch (err) { toast(erroAmigavel(err), true); }
     });
