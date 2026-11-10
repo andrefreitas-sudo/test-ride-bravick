@@ -12,17 +12,28 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 function senhaTemporaria(): string {
-  const letras = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz";
+  const letras = "abcdefghjkmnpqrstuvwxyz";
   const nums = "23456789";
-  const todos = letras + nums;
-  const buf = new Uint32Array(10);
+  const buf = new Uint32Array(8);
   crypto.getRandomValues(buf);
-  let s = letras[buf[0] % letras.length] + nums[buf[1] % nums.length];
-  for (let i = 2; i < 10; i++) s += todos[buf[i] % todos.length];
+  let s = "";
+  for (let i = 0; i < 4; i++) s += letras[buf[i] % letras.length];
+  for (let i = 4; i < 8; i++) s += nums[buf[i] % nums.length];
   return s;
 }
 
 const PERFIS = ["master", "gestor", "vendedor"];
+// O login no app é só o usuário curto. Este endereço existe apenas porque o
+// serviço de login do Supabase exige um e-mail; nada é enviado para ele.
+const DOMINIO = "testride.bravick.com.br";
+const USUARIO_OK = /^[a-z0-9][a-z0-9._-]{2,19}$/;
+const enderecoDe = (usuario: string) => `${usuario}@${DOMINIO}`;
+
+function senhaValida(s: string): string | null {
+  if (s.length < 6) return "A senha precisa ter pelo menos 6 caracteres.";
+  if (s.length > 72) return "A senha é longa demais.";
+  return null;
+}
 
 function chaveServidor(): string {
   // Aceita a chave antiga (service_role) ou as novas chaves secretas (sb_secret_...)
@@ -56,21 +67,29 @@ Deno.serve(async (req) => {
   const acao = String(body.acao || "");
 
   if (acao === "criar") {
-    const email = String(body.email || "").trim().toLowerCase();
     const nome = String(body.nome || "").trim().slice(0, 120);
+    const usuario = String(body.usuario || "").trim().toLowerCase();
     const perfil = String(body.perfil || "vendedor");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ erro: "E-mail inválido." }, 400);
+    const senha = String(body.senha || "") || senhaTemporaria();
     if (!nome) return json({ erro: "Informe o nome." }, 400);
+    if (!USUARIO_OK.test(usuario)) return json({ erro: "Usuário inválido. Use de 3 a 20 letras ou números, sem espaços nem acentos." }, 400);
     if (!PERFIS.includes(perfil)) return json({ erro: "Perfil inválido." }, 400);
+    const ruim = senhaValida(senha);
+    if (ruim) return json({ erro: ruim }, 400);
 
-    const senha = senhaTemporaria();
-    const { data: novo, error } = await admin.auth.admin.createUser({ email, password: senha, email_confirm: true });
+    const { data: existe } = await admin.from("perfis").select("id").eq("usuario", usuario).maybeSingle();
+    if (existe) return json({ erro: "Já existe um usuário com esse login." }, 400);
+
+    const { data: novo, error } = await admin.auth.admin.createUser({
+      email: enderecoDe(usuario), password: senha, email_confirm: true,
+    });
     if (error) {
-      const msg = /already/i.test(error.message) ? "Já existe um usuário com este e-mail." : "Não foi possível criar o usuário.";
+      const msg = /already/i.test(error.message) ? "Já existe um usuário com esse login." : "Não foi possível criar o usuário.";
       return json({ erro: msg }, 400);
     }
     const { error: e2 } = await admin.from("perfis").insert({
-      id: novo.user.id, nome, email, perfil, ativo: true, deve_trocar_senha: true,
+      id: novo.user.id, nome, usuario, email: enderecoDe(usuario), perfil, ativo: true,
+      deve_trocar_senha: body.trocar_senha !== false,
       todas_lojas: body.todas_lojas === true,
       lojas: Array.isArray(body.lojas) ? (body.lojas as string[]).filter((u) => /^[0-9a-f-]{36}$/i.test(u)) : [],
     });
@@ -78,16 +97,18 @@ Deno.serve(async (req) => {
       await admin.auth.admin.deleteUser(novo.user.id);
       return json({ erro: "Não foi possível gravar o perfil." }, 400);
     }
-    return json({ ok: true, id: novo.user.id, senha_temporaria: senha });
+    return json({ ok: true, id: novo.user.id, usuario, senha });
   }
 
   if (acao === "redefinir_senha") {
     const id = String(body.id || "");
-    const senha = senhaTemporaria();
+    const senha = String(body.senha || "") || senhaTemporaria();
+    const ruim = senhaValida(senha);
+    if (ruim) return json({ erro: ruim }, 400);
     const { error } = await admin.auth.admin.updateUserById(id, { password: senha });
     if (error) return json({ erro: "Não foi possível redefinir a senha." }, 400);
-    await admin.from("perfis").update({ deve_trocar_senha: true }).eq("id", id);
-    return json({ ok: true, senha_temporaria: senha });
+    await admin.from("perfis").update({ deve_trocar_senha: body.trocar_senha !== false }).eq("id", id);
+    return json({ ok: true, senha });
   }
 
   if (acao === "definir_ativo") {

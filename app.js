@@ -33,6 +33,9 @@
   const PERFIS = { master: 'Master', gestor: 'Gestor', vendedor: 'Vendedor' };
   const CATS_MOTO = ['A', 'AB', 'AC', 'AD', 'AE'];
   const CATS_TODAS = ['A', 'AB', 'AC', 'AD', 'AE', 'B', 'C', 'D', 'E', 'ACC'];
+  const DOMINIO_LOGIN = 'testride.bravick.com.br'; // endereço técnico do login; nada é enviado para ele
+  const semAcento = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const sugerirUsuario = (nome) => semAcento(nome).trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
   const MODELOS_RE = ['Hunter 350', 'Classic 350', 'Meteor 350', 'Bullet 350', 'Himalayan 450', 'Guerrilla 450', 'Super Meteor 650', 'Shotgun 650', 'Bear 650', 'Classic 650'];
 
   // Máscaras e validações
@@ -237,7 +240,7 @@
         <small>Royal Enfield · Termo digital de test ride</small></div></div>
         <div class="card form-grid">
           ${msg ? `<div class="chip warn plain" style="white-space:normal">${esc(msg)}</div>` : ''}
-          <label class="f"><span>E-mail</span><input class="input" type="email" name="email" autocomplete="username" inputmode="email" required></label>
+          <label class="f"><span>Usuário</span><input class="input" type="text" name="usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
           <label class="f"><span>Senha</span><input class="input" type="password" name="senha" autocomplete="current-password" required></label>
           <button class="btn primary block" type="submit">Entrar</button>
           <small class="muted" style="text-align:center">Esqueceu a senha? Fale com o administrador do sistema.</small>
@@ -246,15 +249,21 @@
     const f = $('#f-login');
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = f.email.value.trim(), senha = f.senha.value;
-      if (!email || !senha) return toast('Informe e-mail e senha.', true);
+      const entrada = f.usuario.value.trim(), senha = f.senha.value;
+      if (!entrada || !senha) return toast('Informe usuário e senha.', true);
       const solta = travar($('button[type=submit]', f), 'Entrando…');
+      // O serviço de login trabalha com endereços; o usuário curto é convertido aqui.
+      let email = entrada.toLowerCase();
+      if (!email.includes('@')) {
+        const { data } = await sb.rpc('email_do_usuario', { u: email }).catch(() => ({ data: null }));
+        email = data || `${email}@${DOMINIO_LOGIN}`;
+      }
       const { error } = await sb.auth.signInWithPassword({ email, password: senha });
       if (error) {
         solta();
         const m = /rate|too many/i.test(error.message) ? 'Muitas tentativas. Aguarde alguns minutos.'
           : /banned|disabled/i.test(error.message) ? 'Seu acesso está desativado.'
-          : /fetch|network/i.test(error.message) ? 'Sem conexão. Verifique a internet e tente novamente.' : 'E-mail ou senha incorretos.';
+          : /fetch|network/i.test(error.message) ? 'Sem conexão. Verifique a internet e tente novamente.' : 'Usuário ou senha incorretos.';
         return toast(m, true);
       }
       if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
@@ -464,7 +473,7 @@
         ${isGestor() && vendedores.length > 1 ? `<select class="input" id="fv" aria-label="Vendedor"><option value="">Todos os vendedores</option>${vendedores.map((v) => `<option>${esc(v)}</option>`).join('')}</select>` : ''}
       </div>
       <div id="lr"></div></div>`;
-    let filtrados = rs;
+    let filtrados = rs, mostrar = 60;
     const pintar = () => {
       const q = $('#fq').value.trim().toLowerCase(), qd = digitos(q);
       const m = $('#fm').value, l = $('#fl')?.value, v = $('#fv')?.value;
@@ -477,10 +486,13 @@
         return base.includes(q) || (qd.length >= 3 && (digitos(r.cliente_cpf).includes(qd) || digitos(r.cliente_telefone).includes(qd)));
       });
       $('#cont').textContent = `${filtrados.length} de ${rs.length} registros`;
-      $('#lr').innerHTML = filtrados.length ? filtrados.slice(0, 300).map(itemRide).join('') + (filtrados.length > 300 ? '<p class="muted" style="text-align:center">Mostrando os 300 mais recentes. Use os filtros para refinar.</p>' : '')
+      $('#lr').innerHTML = filtrados.length
+        ? filtrados.slice(0, mostrar).map(itemRide).join('')
+          + (filtrados.length > mostrar ? `<button class="btn block" data-mais style="margin-top:10px">Mostrar mais ${Math.min(60, filtrados.length - mostrar)} de ${filtrados.length - mostrar}</button>` : '')
         : '<div class="card empty"><b>Nenhum test ride encontrado</b>Ajuste os filtros ou registre um novo.</div>';
+      on($('#lr'), '[data-mais]', 'click', () => { mostrar += 60; pintar(); });
     };
-    ['#fq', '#fm', '#fl', '#fv'].forEach((s) => $(s)?.addEventListener('input', pintar));
+    ['#fq', '#fm', '#fl', '#fv'].forEach((s) => $(s)?.addEventListener('input', () => { mostrar = 60; pintar(); }));
     on(view(), '[data-xlsx]', 'click', async (e) => {
       if (!filtrados.length) return toast('Nada para exportar.', true);
       const solta = travar(e.currentTarget, 'Gerando…');
@@ -1051,6 +1063,7 @@
         <label class="check"><input type="checkbox" id="ciente" ${W.ciente ? 'checked' : ''}> O cliente leu o termo e concorda com as condições</label>
         <div class="actions" style="justify-content:space-between"><button class="btn" data-voltar>${I.back} Voltar</button><button class="btn primary" data-seguir>Coletar assinaturas ${I.next}</button></div>
       </div></div>`;
+    carregarScript('vendor/jspdf.js').catch(() => {}); // adianta o gerador do termo
     const pintarTermo = () => {
       $('#termo-txt').innerHTML = termoSecoes({ ...d, tempo_max_min: W.tempo, limite_percurso: W.limite })
         .map((s) => `<h3>${esc(s.t)}</h3>${s.p.map((p) => `<p>${esc(p)}</p>`).join('')}${s.i.length ? `<ul>${s.i.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}`).join('');
@@ -1116,24 +1129,28 @@
       try { localStorage.setItem('trb-loja', data.loja_id); } catch (_) { /* sem armazenamento */ }
     }
     const id = W.ride.id;
-    if (W.cnh && !W.ride.cnh_arquivo) {
+
+    // A foto da CNH e o termo sobem ao mesmo tempo, e o registro é atualizado uma vez só.
+    const campos = {};
+    const tarefas = [];
+    if (W.cnh && !W.ride.cnh_arquivo) tarefas.push((async () => {
       const pdf = W.cnh.tipo === 'application/pdf', caminho = `${id}/cnh.${pdf ? 'pdf' : 'jpg'}`;
       const { error } = await sb.storage.from('cnh').upload(caminho, dataUrlParaBlob(W.cnh.dataUrl), { contentType: W.cnh.tipo, upsert: true });
       if (error) throw error;
-      const upd = { cnh_arquivo: caminho, cnh_arquivo_tipo: W.cnh.tipo, cnh_enviada_em: new Date().toISOString() };
-      const { error: e2 } = await sb.from('test_rides').update(upd).eq('id', id);
-      if (e2) throw e2;
-      Object.assign(W.ride, upd);
-    }
-    if (!W.pdfBlob) W.pdfBlob = await gerarTermoPDF(W.ride);
-    if (!W.ride.termo_arquivo) {
+      Object.assign(campos, { cnh_arquivo: caminho, cnh_arquivo_tipo: W.cnh.tipo, cnh_enviada_em: new Date().toISOString() });
+    })());
+    if (!W.ride.termo_arquivo) tarefas.push((async () => {
+      if (!W.pdfBlob) W.pdfBlob = await gerarTermoPDF(W.ride);
       const caminho = `${id}/termo.pdf`;
       const { error } = await sb.storage.from('termos').upload(caminho, W.pdfBlob, { contentType: 'application/pdf', upsert: true });
       if (error) throw error;
-      const { error: e2 } = await sb.from('test_rides').update({ termo_arquivo: caminho }).eq('id', id);
-      if (e2) throw e2;
-      W.ride.termo_arquivo = caminho;
-    }
+      campos.termo_arquivo = caminho;
+    })());
+    if (!tarefas.length) return;
+    await Promise.all(tarefas);
+    const { error } = await sb.from('test_rides').update(campos).eq('id', id);
+    if (error) throw error;
+    Object.assign(W.ride, campos);
   }
 
   // ------------------------------------------------------------------ envio do termo
@@ -1377,7 +1394,7 @@
     const instalado = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
     view().innerHTML = `<div class="page" style="max-width:760px"><h1 style="margin-bottom:16px">Minha conta</h1>
       <div class="card"><div class="list-row" style="border:0"><span class="avatar" style="width:48px;height:48px;font-size:16px">${esc(iniciais(me.nome))}</span>
-        <div class="grow"><h2>${esc(me.nome)}</h2><small>${esc(me.email)} · ${esc(PERFIS[me.perfil])}</small></div></div>
+        <div class="grow"><h2>${esc(me.nome)}</h2><small>${esc(me.usuario || me.email)} · ${esc(PERFIS[me.perfil])}</small></div></div>
         <div class="actions" style="margin-top:8px"><button class="btn" data-senha>Trocar senha</button><button class="btn danger" data-sair3>Sair</button></div></div>
       ${instalado ? '' : `<div class="card"><h2 style="margin-bottom:8px">Instalar no celular</h2>
         ${S.instalar ? '<button class="btn primary" data-instalar>Instalar aplicativo</button>'
@@ -1390,16 +1407,32 @@
   }
 
   // ------------------------------------------------------------------ administração: usuários
-  function mostrarSenha(nome, email, senha) {
-    const m = modal(`<h2>Acesso criado</h2><p class="muted" style="margin:0">Envie estes dados para <b>${esc(nome)}</b> por um canal seguro. No primeiro acesso, o sistema pedirá uma nova senha.</p>
-      <div style="margin-top:12px"><small class="muted">Endereço</small><div class="secret" style="font-size:14px;letter-spacing:0">${esc(location.origin + location.pathname)}</div>
-      <small class="muted">E-mail</small><div class="secret" style="font-size:15px;letter-spacing:0">${esc(email)}</div>
-      <small class="muted">Senha temporária</small><div class="secret">${esc(senha)}</div></div>
-      <div class="actions"><button class="btn" data-copiar>${I.copy} Copiar mensagem</button><button class="btn primary" data-fechar>Pronto</button></div>`);
+  function novaSenha() {
+    const letras = 'abcdefghjkmnpqrstuvwxyz', nums = '23456789';
+    const b = new Uint32Array(8); crypto.getRandomValues(b);
+    let s = ''; for (let i = 0; i < 4; i++) s += letras[b[i] % letras.length];
+    for (let i = 4; i < 8; i++) s += nums[b[i] % nums.length];
+    return s;
+  }
+
+  function mostrarAcesso(nome, usuario, senha) {
+    const m = modal(`<h2>Acesso de ${esc(nome)}</h2><p class="muted" style="margin:0">Passe estes dados para a pessoa.</p>
+      <div class="form-grid cols-2" style="margin-top:12px">
+        <div><small class="muted">Usuário</small><div class="secret" style="font-size:20px;letter-spacing:0">${esc(usuario)}</div></div>
+        <div><small class="muted">Senha</small><div class="secret" style="font-size:20px">${esc(senha)}</div></div>
+      </div>
+      <div class="actions"><button class="btn" data-copiar>${I.copy} Copiar</button><button class="btn primary" data-fechar>Pronto</button></div>`);
     $('[data-copiar]', m.el).addEventListener('click', async () => {
-      const t = `Olá, ${nome}! Seu acesso ao ${NOME_APP}:\n${location.origin + location.pathname}\nE-mail: ${email}\nSenha temporária: ${senha}\nNo primeiro acesso você criará sua senha pessoal.`;
-      try { await navigator.clipboard.writeText(t); toast('Mensagem copiada.'); } catch (_) { toast('Não foi possível copiar.', true); }
+      const t = `Olá, ${nome}! Seu acesso ao ${NOME_APP}:\n${location.origin + location.pathname}\nUsuário: ${usuario}\nSenha: ${senha}`;
+      try { await navigator.clipboard.writeText(t); toast('Dados copiados.'); } catch (_) { toast('Não foi possível copiar.', true); }
     });
+  }
+
+  function campoSenha(valor) {
+    return `<label class="f"><span>Senha <em>*</em></span>
+      <div style="display:flex;gap:8px"><input class="input" name="senha" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(valor)}" style="flex:1">
+      <button type="button" class="btn" data-gerar>Gerar</button></div>
+      <div class="hint">Mínimo de 6 caracteres. Fica visível para você anotar e passar à pessoa.</div></label>`;
   }
 
   function formUsuario(u) {
@@ -1409,35 +1442,47 @@
       <form id="f-user" class="form-grid" novalidate>
         <label class="f"><span>Nome completo <em>*</em></span><input class="input" name="nome" maxlength="120" value="${esc(d.nome || '')}">
           <div class="hint">É o nome que sai no termo como responsável pela concessionária.</div></label>
-        <label class="f"><span>E-mail (login) <em>*</em></span><input class="input" name="email" type="email" value="${esc(d.email || '')}" ${novo ? '' : 'readonly'}></label>
-        <label class="f"><span>Perfil</span><select class="input" name="perfil">${Object.entries(PERFIS).map(([k, l]) => `<option value="${k}" ${d.perfil === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-          <div class="hint">Vendedor: registra e vê os próprios test rides. Gestor: vê todos da loja, cadastra motos, exporta e cancela. Master: tudo, inclusive usuários.</div></label>
+        <div class="form-grid cols-2">
+          <label class="f"><span>Usuário (login) <em>*</em></span><input class="input" name="usuario" maxlength="20" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(d.usuario || '')}" ${novo ? '' : 'readonly'}>
+            <div class="hint">${novo ? 'Só letras e números, sem espaços. Ex.: carla' : 'O login não muda depois de criado.'}</div></label>
+          <label class="f"><span>Perfil</span><select class="input" name="perfil">${Object.entries(PERFIS).map(([k, l]) => `<option value="${k}" ${d.perfil === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        </div>
+        ${novo ? campoSenha(novaSenha()) : ''}
+        ${novo ? '<label class="check"><input type="checkbox" name="trocar"> Pedir que a pessoa crie uma nova senha no primeiro acesso</label>' : ''}
+        <div class="hint" style="margin-top:-4px">Vendedor: registra e vê os próprios test rides. Gestor: vê todos da loja, cadastra motos, exporta e cancela. Master: tudo, inclusive usuários.</div>
         <div class="f"><span style="display:block;font-size:13px;font-weight:600;margin-bottom:8px">Lojas que pode acessar</span>
           <label class="check"><input type="checkbox" name="todas_lojas" ${d.todas_lojas ? 'checked' : ''}> Todas as lojas</label>
           <div id="lista-lj" class="perm-grid ${d.todas_lojas ? 'hidden' : ''}">${S.lojas.filter((x) => x.ativo || (d.lojas || []).includes(x.id)).map((x) => `<label class="check"><input type="checkbox" name="lj" value="${x.id}" ${(d.lojas || []).includes(x.id) ? 'checked' : ''}> ${esc(x.nome)}</label>`).join('')}</div></div>
         ${novo ? '' : `<div class="card" style="background:var(--surface-2);box-shadow:none"><div class="actions">
-          <button type="button" class="btn sm" data-reset>Gerar nova senha</button>
+          <button type="button" class="btn sm" data-reset>Trocar a senha</button>
           ${u.id !== S.me.id ? `<button type="button" class="btn sm ${u.ativo ? 'danger' : ''}" data-ativo>${u.ativo ? 'Desativar acesso' : 'Reativar acesso'}</button>` : ''}</div>
           <small class="muted">Último acesso: ${fmtDH(u.ultimo_acesso)}</small></div>`}
         <div class="actions"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn primary" type="submit">${novo ? 'Criar acesso' : 'Salvar'}</button></div>
       </form>`, { wide: true });
     const f = $('#f-user', m.el);
     f.todas_lojas.addEventListener('change', () => $('#lista-lj', f).classList.toggle('hidden', f.todas_lojas.checked));
+    if (novo) {
+      on(f, '[data-gerar]', 'click', () => { f.senha.value = novaSenha(); });
+      f.nome.addEventListener('input', () => { if (!f.usuario.dataset.tocado) f.usuario.value = sugerirUsuario(f.nome.value); });
+      f.usuario.addEventListener('input', (e) => { e.target.dataset.tocado = '1'; e.target.value = semAcento(e.target.value).toLowerCase().replace(/[^a-z0-9._-]/g, ''); });
+    }
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const corpo = { nome: f.nome.value.trim(), email: f.email.value.trim().toLowerCase(), perfil: f.perfil.value,
+      const corpo = { nome: f.nome.value.trim(), usuario: f.usuario.value.trim().toLowerCase(), perfil: f.perfil.value,
         todas_lojas: f.todas_lojas.checked, lojas: $$('input[name=lj]:checked', f).map((x) => x.value) };
       if (corpo.nome.split(/\s+/).length < 2) return toast('Informe nome e sobrenome.', true);
-      if (novo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(corpo.email)) return toast('Informe um e-mail válido.', true);
+      if (novo && !/^[a-z0-9][a-z0-9._-]{2,19}$/.test(corpo.usuario)) return toast('Usuário inválido. Use de 3 a 20 letras ou números, sem espaços.', true);
+      if (novo && f.senha.value.trim().length < 6) return toast('A senha precisa ter pelo menos 6 caracteres.', true);
       if (!corpo.todas_lojas && !corpo.lojas.length && corpo.perfil !== 'master') return toast('Selecione ao menos uma loja.', true);
       if (!novo && u.id === S.me.id && corpo.perfil !== 'master') return toast('Você não pode remover seu próprio perfil Master.', true);
       const solta = travar($('button[type=submit]', f), 'Salvando…');
       try {
         if (novo) {
-          const r = await invocar('admin-usuarios', { acao: 'criar', ...corpo });
-          m.fechar(); mostrarSenha(corpo.nome, corpo.email, r.senha_temporaria);
+          const senha = f.senha.value.trim();
+          await invocar('admin-usuarios', { acao: 'criar', ...corpo, senha, trocar_senha: f.trocar.checked });
+          m.fechar(); mostrarAcesso(corpo.nome, corpo.usuario, senha);
         } else {
-          const { email, ...upd } = corpo;
+          const { usuario, ...upd } = corpo;
           const { error } = await sb.from('perfis').update(upd).eq('id', u.id);
           if (error) throw error;
           if (u.id === S.me.id) Object.assign(S.me, upd);
@@ -1447,10 +1492,23 @@
       } catch (err) { solta(); toast(erroAmigavel(err), true); }
     });
     if (!novo) {
-      on(f, '[data-reset]', 'click', async () => {
-        if (!(await confirmar('Gerar nova senha', `Uma senha temporária será criada para ${u.nome}. A senha atual deixará de funcionar.`, 'Gerar'))) return;
-        try { const r = await invocar('admin-usuarios', { acao: 'redefinir_senha', id: u.id }); m.fechar(); mostrarSenha(u.nome, u.email, r.senha_temporaria); }
-        catch (err) { toast(erroAmigavel(err), true); }
+      on(f, '[data-reset]', 'click', () => {
+        const ms = modal(`<h2>Trocar a senha de ${esc(u.nome)}</h2><form id="f-senha2" class="form-grid" novalidate>
+          ${campoSenha(novaSenha())}
+          <label class="check"><input type="checkbox" name="trocar"> Pedir que a pessoa crie uma nova senha no primeiro acesso</label>
+          <div class="actions"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn primary" type="submit">Salvar senha</button></div></form>`);
+        const f2 = $('#f-senha2', ms.el);
+        on(ms.el, '[data-gerar]', 'click', () => { f2.senha.value = novaSenha(); });
+        f2.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const senha = f2.senha.value.trim();
+          if (senha.length < 6) return toast('A senha precisa ter pelo menos 6 caracteres.', true);
+          const solta = travar($('button[type=submit]', f2), 'Salvando…');
+          try {
+            await invocar('admin-usuarios', { acao: 'redefinir_senha', id: u.id, senha, trocar_senha: f2.trocar.checked });
+            ms.fechar(); m.fechar(); mostrarAcesso(u.nome, u.usuario || u.email, senha); telaUsuarios();
+          } catch (err) { solta(); toast(erroAmigavel(err), true); }
+        });
       });
       on(f, '[data-ativo]', 'click', async () => {
         const ativo = !u.ativo;
@@ -1468,14 +1526,14 @@
     if (error) return toast(erroAmigavel(error), true);
     const us = data || [];
     view().innerHTML = `<div class="page" style="max-width:900px"><div class="page-head"><h1>Usuários</h1><button class="btn primary" data-novo>${I.plus} Novo usuário</button></div>
-      <input class="input" type="search" placeholder="Buscar por nome ou e-mail" id="bu" style="margin-bottom:12px" aria-label="Buscar usuário">
+      <input class="input" type="search" placeholder="Buscar por nome ou usuário" id="bu" style="margin-bottom:12px" aria-label="Buscar usuário">
       <div class="card" id="lu"></div></div>`;
     const pintar = () => {
       const q = $('#bu').value.toLowerCase();
-      const r = us.filter((u) => !q || (u.nome + ' ' + u.email).toLowerCase().includes(q));
+      const r = us.filter((u) => !q || (u.nome + ' ' + (u.usuario || '') + ' ' + u.email).toLowerCase().includes(q));
       $('#lu').innerHTML = r.length ? r.map((u) => `<a class="list-row" href="#" data-u="${u.id}" style="color:inherit">
         <span class="avatar">${esc(iniciais(u.nome))}</span>
-        <div class="grow"><b>${esc(u.nome)}</b><br><small>${esc(u.email)} · ${u.perfil === 'master' || u.todas_lojas ? 'Todas as lojas' : esc((u.lojas || []).map((id) => loja(id)?.nome).filter(Boolean).join(', ') || 'Sem loja')}</small></div>
+        <div class="grow"><b>${esc(u.nome)}</b><br><small>${esc(u.usuario || u.email)} · ${u.perfil === 'master' || u.todas_lojas ? 'Todas as lojas' : esc((u.lojas || []).map((id) => loja(id)?.nome).filter(Boolean).join(', ') || 'Sem loja')}</small></div>
         <div style="text-align:right"><span class="chip info plain">${esc(PERFIS[u.perfil])}</span>${u.ativo ? '' : '<br><span class="chip bad" style="margin-top:4px">Inativo</span>'}</div></a>`).join('')
         : '<div class="empty"><b>Nenhum usuário</b></div>';
       on($('#lu'), '[data-u]', 'click', (e) => { e.preventDefault(); formUsuario(us.find((x) => x.id === e.currentTarget.dataset.u)); });

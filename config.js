@@ -2,7 +2,7 @@
 // A chave abaixo é a chave PÚBLICA (publishable) — feita para ficar no site.
 // A segurança dos dados é garantida pelas regras do banco (RLS).
 window.TRB_CONFIG = {
-  SUPABASE_URL: 'https://konxtsmsreszgqpqnrdm.supabase.co',
-  SUPABASE_KEY: 'sb_publishable_-BeqttvW-M81gaL6ef7Org_eWTIvueP',
+  SUPABASE_URL: 'https://sjjkadxxfxmmbtqcmmlz.supabase.co',
+  SUPABASE_KEY: 'sb_publishable_nagMnW2EyHZMNMvbxCHkMQ_6mJ5Q0Rd',
   INATIVIDADE_MIN: 60
 };

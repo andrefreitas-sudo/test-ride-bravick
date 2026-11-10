@@ -13,6 +13,8 @@ Sistema independente (não usa o banco do CRM). Mesmo modelo do RH Grupo Nogueir
 
 ## Perfis
 - **Vendedor:** registra e vê os próprios test rides.
+
+O Master cadastra cada pessoa com nome, usuário e senha — sem e-mail.
 - **Gestor:** vê todos da(s) sua(s) loja(s), cadastra motos, exporta Excel e cancela.
 - **Master:** tudo, mais usuários, lojas, configurações e auditoria.
 
@@ -38,6 +40,7 @@ Sistema independente (não usa o banco do CRM). Mesmo modelo do RH Grupo Nogueir
 ## Instalação
 1. **Supabase:** criar o projeto (região São Paulo) e rodar `supabase/schema.sql` no SQL Editor.
 2. **Master:** em Authentication > Users, criar o usuário com "Auto Confirm User"; depois rodar `supabase/master.sql`.
+   O login no app é o **usuário curto** (ex.: `andre`), não o e-mail. O endereço serve só porque o serviço de login exige um.
 3. **Funções (Edge Functions):** criar `admin-usuarios` e `termo` com o conteúdo dos arquivos `.ts`.
    - Em `termo`, **desligar "Verify JWT"** (o cliente abre o link sem login).
    - Opcional: criar `ler-cnh`, cadastrar `ANTHROPIC_API_KEY` ou `GEMINI_API_KEY` em Secrets e ligar "Ler a CNH com IA" em Configurações.

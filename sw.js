@@ -1,5 +1,5 @@
 // Service worker — guarda só a interface (nunca dados de clientes).
-const VERSAO = 'trb-v4';
+const VERSAO = 'trb-v5';
 const CACHE_OCR = 'trb-leitura'; // arquivos da leitura da CNH: pesados e sempre iguais, nunca apagados
 
 // Interface do app: baixada na instalação.

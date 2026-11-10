@@ -30,7 +30,8 @@ where not exists (select 1 from public.lojas);
 create table if not exists public.perfis (
   id uuid primary key references auth.users(id) on delete restrict,
   nome text not null,
-  email text not null,
+  usuario text,                              -- login curto (ex.: "carla"), sem e-mail
+  email text not null,                       -- endereço técnico do login, não usado para contato
   perfil text not null default 'vendedor' check (perfil in ('master','gestor','vendedor')),
   ativo boolean not null default true,
   deve_trocar_senha boolean not null default true,
@@ -39,6 +40,12 @@ create table if not exists public.perfis (
   ultimo_acesso timestamptz,
   criado_em timestamptz not null default now()
 );
+
+alter table public.perfis add column if not exists usuario text;
+create unique index if not exists perfis_usuario_idx on public.perfis (usuario);
+alter table public.perfis drop constraint if exists perfis_usuario_formato;
+alter table public.perfis add constraint perfis_usuario_formato
+  check (usuario is null or usuario ~ '^[a-z0-9][a-z0-9._-]{2,19}$');
 
 create table if not exists public.motos (
   id uuid primary key default gen_random_uuid(),
@@ -293,6 +300,16 @@ end $$;
 -- ---------------------------------------------------------------------
 -- 5. FUNÇÕES CHAMADAS PELO APP
 -- ---------------------------------------------------------------------
+-- Usada pela tela de login (antes de entrar, por isso aberta): troca o usuário
+-- curto pelo endereço técnico que o servidor de login reconhece.
+create or replace function public.email_do_usuario(u text)
+returns text language sql stable security definer set search_path = public as $$
+  select p.email from public.perfis p
+  where p.usuario = lower(btrim(u)) and p.ativo limit 1
+$$;
+revoke execute on function public.email_do_usuario(text) from public;
+grant execute on function public.email_do_usuario(text) to anon, authenticated;
+
 create or replace function public.senha_trocada()
 returns void language sql security definer set search_path = public as $$
   update public.perfis set deve_trocar_senha = false where id = auth.uid();
