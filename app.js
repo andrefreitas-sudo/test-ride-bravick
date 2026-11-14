@@ -262,19 +262,25 @@
       const entrada = f.usuario.value.trim(), senha = f.senha.value;
       if (!entrada || !senha) return toast('Informe usuário e PIN.', true);
       const solta = travar($('button[type=submit]', f), 'Entrando…');
-      // O serviço de login trabalha com endereços; o usuário curto é convertido aqui.
-      let email = entrada.toLowerCase();
-      if (!email.includes('@')) {
-        const { data } = await sb.rpc('email_do_usuario', { u: email }).catch(() => ({ data: null }));
-        email = data || `${email}@${DOMINIO_LOGIN}`;
+      let error = null;
+      try {
+        // O serviço de login trabalha com endereços; o usuário curto é convertido aqui.
+        let email = entrada.toLowerCase();
+        if (!email.includes('@')) {
+          let achado = null;
+          try { achado = (await sb.rpc('email_do_usuario', { u: email })).data; } catch (_) { /* segue com o endereço padrão */ }
+          email = achado || `${email}@${DOMINIO_LOGIN}`;
+        }
+        ({ error } = await sb.auth.signInWithPassword({ email, password: senha }));
+      } catch (err) {
+        error = err;
       }
-      const { error } = await sb.auth.signInWithPassword({ email, password: senha });
       if (error) {
         solta();
-        const m = /rate|too many/i.test(error.message) ? 'Muitas tentativas. Aguarde alguns minutos.'
+        const msg = /rate|too many/i.test(error.message) ? 'Muitas tentativas. Aguarde alguns minutos.'
           : /banned|disabled/i.test(error.message) ? 'Seu acesso está desativado.'
-          : /fetch|network/i.test(error.message) ? 'Sem conexão. Verifique a internet e tente novamente.' : 'Usuário ou PIN incorretos.';
-        return toast(m, true);
+          : /fetch|network|Load failed/i.test(error.message) ? 'Sem conexão. Verifique a internet e tente novamente.' : 'Usuário ou PIN incorretos.';
+        return toast(msg, true);
       }
       if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
       carregarSessao();
