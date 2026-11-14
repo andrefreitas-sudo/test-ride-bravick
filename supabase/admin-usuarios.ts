@@ -11,15 +11,11 @@ const cors = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
+// PIN de 6 números — é o que a pessoa digita para entrar.
 function senhaTemporaria(): string {
-  const letras = "abcdefghjkmnpqrstuvwxyz";
-  const nums = "23456789";
-  const buf = new Uint32Array(8);
+  const buf = new Uint32Array(6);
   crypto.getRandomValues(buf);
-  let s = "";
-  for (let i = 0; i < 4; i++) s += letras[buf[i] % letras.length];
-  for (let i = 4; i < 8; i++) s += nums[buf[i] % nums.length];
-  return s;
+  return Array.from(buf, (n) => n % 10).join("");
 }
 
 const PERFIS = ["master", "gestor", "vendedor"];
@@ -30,7 +26,7 @@ const USUARIO_OK = /^[a-z0-9][a-z0-9._-]{2,19}$/;
 const enderecoDe = (usuario: string) => `${usuario}@${DOMINIO}`;
 
 function senhaValida(s: string): string | null {
-  if (s.length < 6) return "A senha precisa ter pelo menos 6 caracteres.";
+  if (s.length < 6) return "O PIN precisa ter 6 números.";
   if (s.length > 72) return "A senha é longa demais.";
   return null;
 }

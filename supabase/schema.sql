@@ -143,8 +143,8 @@ create table if not exists public.test_rides (
   cliente_nascimento date,
   -- CNH
   cnh_numero text,
-  cnh_categoria text not null check (cnh_categoria in ('A','AB','AC','AD','AE')),
-  cnh_validade date not null,
+  cnh_categoria text check (cnh_categoria is null or cnh_categoria in ('A','AB','AC','AD','AE')),
+  cnh_validade date,                -- quando não dá para ler da foto, fica em branco
   cnh_arquivo text,                -- caminho no bucket "cnh" (apagado após a retenção)
   cnh_arquivo_tipo text,
   cnh_enviada_em timestamptz,
@@ -165,6 +165,13 @@ create table if not exists public.test_rides (
   criado_em timestamptz not null default now(),
   atualizado_em timestamptz not null default now()
 );
+-- Categoria e validade passaram a ser opcionais: a foto da CNH é a fonte
+alter table public.test_rides alter column cnh_categoria drop not null;
+alter table public.test_rides alter column cnh_validade drop not null;
+alter table public.test_rides drop constraint if exists test_rides_cnh_categoria_check;
+alter table public.test_rides add constraint test_rides_cnh_categoria_check
+  check (cnh_categoria is null or cnh_categoria in ('A','AB','AC','AD','AE'));
+
 create index if not exists test_rides_criado_idx on public.test_rides (criado_em desc);
 create index if not exists test_rides_loja_idx on public.test_rides (loja_id);
 create index if not exists test_rides_autor_idx on public.test_rides (criado_por);
@@ -194,7 +201,7 @@ begin
   new.criado_em := now();
   new.atualizado_em := now();
   new.retorno_previsto_em := new.saida_em + make_interval(mins => new.tempo_max_min);
-  if new.cnh_validade < (now() at time zone 'America/Sao_Paulo')::date then
+  if new.cnh_validade is not null and new.cnh_validade < (now() at time zone 'America/Sao_Paulo')::date then
     raise exception 'CNH vencida.';
   end if;
   return new;

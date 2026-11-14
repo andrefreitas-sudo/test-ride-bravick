@@ -202,11 +202,12 @@
     const uid = data?.session?.user?.id;
     if (!uid) return telaLogin(msg);
     // Perfil e cadastros em paralelo: uma única ida ao servidor
-    const [p, l, m, cf] = await Promise.all([
+    const [p, l, m, cf, rd] = await Promise.all([
       sb.from('perfis').select('*').eq('id', uid).maybeSingle(),
       sb.from('lojas').select('*').order('nome'),
       sb.from('motos').select('*').order('modelo'),
       sb.from('configuracoes').select('*'),
+      sb.from('test_rides').select(COLS_LISTA).order('criado_em', { ascending: false }).limit(3000),
     ]);
     const me = p.data;
     if (p.error || !me || !me.ativo) {
@@ -219,6 +220,7 @@
     if (me.deve_trocar_senha) return telaTrocarSenha(true);
     S.lojas = l.data || []; S.motos = m.data || [];
     S.config = Object.fromEntries((cf.data || []).map((x) => [x.chave, x.valor]));
+    if (!rd.error) { S.rides = rd.data || []; S.ridesEm = Date.now(); }
     montarApp();
   }
 
@@ -241,7 +243,7 @@
         <div class="card form-grid">
           ${msg ? `<div class="chip warn plain" style="white-space:normal">${esc(msg)}</div>` : ''}
           <label class="f"><span>Usuário</span><input class="input" type="text" name="usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
-          <label class="f"><span>Senha</span><input class="input" type="password" name="senha" autocomplete="current-password" required></label>
+          <label class="f"><span>PIN</span><input class="input" type="password" name="senha" inputmode="numeric" autocomplete="current-password" required></label>
           <button class="btn primary block" type="submit">Entrar</button>
           <small class="muted" style="text-align:center">Esqueceu a senha? Fale com o administrador do sistema.</small>
         </div>
@@ -250,7 +252,7 @@
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const entrada = f.usuario.value.trim(), senha = f.senha.value;
-      if (!entrada || !senha) return toast('Informe usuário e senha.', true);
+      if (!entrada || !senha) return toast('Informe usuário e PIN.', true);
       const solta = travar($('button[type=submit]', f), 'Entrando…');
       // O serviço de login trabalha com endereços; o usuário curto é convertido aqui.
       let email = entrada.toLowerCase();
@@ -263,7 +265,7 @@
         solta();
         const m = /rate|too many/i.test(error.message) ? 'Muitas tentativas. Aguarde alguns minutos.'
           : /banned|disabled/i.test(error.message) ? 'Seu acesso está desativado.'
-          : /fetch|network/i.test(error.message) ? 'Sem conexão. Verifique a internet e tente novamente.' : 'Usuário ou senha incorretos.';
+          : /fetch|network/i.test(error.message) ? 'Sem conexão. Verifique a internet e tente novamente.' : 'Usuário ou PIN incorretos.';
         return toast(m, true);
       }
       if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
@@ -272,29 +274,28 @@
   }
 
   function validarSenha(s) {
-    if (s.length < 8) return 'A senha precisa ter pelo menos 8 caracteres.';
-    if (!/[A-Za-z]/.test(s) || !/\d/.test(s)) return 'Use letras e números na senha.';
-    return null;
+    if (/^\d+$/.test(s)) return s.length === 6 ? null : 'O PIN precisa ter 6 números.';
+    return s.length >= 6 ? null : 'A senha precisa ter pelo menos 6 caracteres.';
   }
 
   function telaTrocarSenha(obrigatoria) {
     const html = `
       <form id="f-senha" class="form-grid" novalidate>
-        ${obrigatoria ? '<p class="muted" style="margin:0">Por segurança, crie uma senha pessoal para continuar.</p>' : ''}
-        <label class="f"><span>Nova senha</span><input class="input" type="password" name="s1" autocomplete="new-password" required></label>
-        <label class="f"><span>Repita a nova senha</span><input class="input" type="password" name="s2" autocomplete="new-password" required>
-        <div class="hint">Mínimo de 8 caracteres, com letras e números.</div></label>
+        ${obrigatoria ? '<p class="muted" style="margin:0">Por segurança, crie um PIN pessoal para continuar.</p>' : ''}
+        <label class="f"><span>Novo PIN</span><input class="input" type="password" inputmode="numeric" name="s1" autocomplete="new-password" required></label>
+        <label class="f"><span>Repita o novo PIN</span><input class="input" type="password" inputmode="numeric" name="s2" autocomplete="new-password" required>
+        <div class="hint">6 números.</div></label>
         <div class="actions" style="justify-content:flex-end">
           ${obrigatoria ? '<button type="button" class="btn ghost" data-sair>Sair</button>' : '<button type="button" class="btn" data-fechar>Cancelar</button>'}
-          <button class="btn primary" type="submit">Salvar senha</button></div>
+          <button class="btn primary" type="submit">Salvar PIN</button></div>
       </form>`;
     let m = null;
     if (obrigatoria) {
       root.innerHTML = `<div class="login-wrap"><div class="login"><div class="logo"><img src="icons/icon-192.png" alt="">
-        <h1>Crie sua senha</h1></div><div class="card">${html}</div></div></div>`;
+        <h1>Crie seu PIN</h1></div><div class="card">${html}</div></div></div>`;
       on(root, '[data-sair]', 'click', () => sb.auth.signOut());
     } else {
-      m = modal(`<h2>Trocar senha</h2>${html}`);
+      m = modal(`<h2>Trocar PIN</h2>${html}`);
     }
     const f = $('#f-senha');
     f.addEventListener('submit', async (e) => {
@@ -302,12 +303,12 @@
       const s1 = f.s1.value, s2 = f.s2.value;
       const inval = validarSenha(s1);
       if (inval) return toast(inval, true);
-      if (s1 !== s2) return toast('As senhas não conferem.', true);
+      if (s1 !== s2) return toast('Os PINs não conferem.', true);
       const solta = travar($('button[type=submit]', f), 'Salvando…');
       const { error } = await sb.auth.updateUser({ password: s1 });
-      if (error) { solta(); return toast(/same|different/i.test(error.message) ? 'A nova senha deve ser diferente da atual.' : erroAmigavel(error), true); }
+      if (error) { solta(); return toast(/same|different/i.test(error.message) ? 'O novo PIN deve ser diferente do atual.' : erroAmigavel(error), true); }
       await sb.rpc('senha_trocada');
-      toast('Senha atualizada.');
+      toast('PIN atualizado.');
       if (m) m.fechar(); else carregarSessao();
     });
   }
@@ -352,9 +353,6 @@
     if (!location.hash || location.hash === '#/') location.hash = '#/inicio';
     else rotear();
     setTimeout(retencaoAutomatica, 4000);
-    // Adianta o download do motor de leitura logo após entrar, para o primeiro test ride não esperar.
-    // Respeita quem pediu economia de dados no aparelho.
-    if (S.config.leitura_ia !== true && !navigator.connection?.saveData) setTimeout(() => prepararOCR().catch(() => {}), 2500);
   }
 
   async function sair() {
@@ -986,29 +984,52 @@
     const cl = (k) => (W.lidos.includes(k) ? 'input lido' : 'input');
     view().innerHTML = `<div class="page" style="max-width:720px">${cabecalhoPassos()}
       <form class="card form-grid" id="f-dados" novalidate>
-        <div><h1>Dados do atendimento</h1><small>${W.leuIA ? 'Os campos em verde foram lidos da foto. Confira cada um com o documento antes de continuar.' : 'Preencha os dados do cliente.'}</small></div>
+        <div><h1>Dados do cliente</h1><small>${W.leuIA ? 'O que está em verde veio da foto da CNH. Confira e complete.' : 'Preencha os dados do cliente.'}</small></div>
         <div id="avisos"></div>
         <label class="f"><span>Moto do test ride <em>*</em></span><select class="input" name="moto_id"><option value="">Selecione…</option>${motos.map((m) => `<option value="${m.id}" ${f.moto_id === m.id ? 'selected' : ''}>${esc(m.modelo)}${m.placa ? ' · ' + esc(m.placa) : ''}</option>`).join('')}</select>
           ${motos.length ? '' : `<div class="hint" style="color:var(--bad)">Nenhuma moto cadastrada para ${esc(loja(W.loja_id)?.nome || 'esta loja')}. ${isGestor() ? '<a href="#/motos">Cadastrar moto</a>' : 'Peça ao gestor para cadastrar.'}</div>`}</label>
         <label class="f"><span>Nome completo <em>*</em></span><input class="${cl('nome')}" name="nome" maxlength="120" autocomplete="off" value="${esc(f.nome)}"></label>
         <div class="form-grid cols-2">
           <label class="f"><span>CPF <em>*</em></span><input class="${cl('cpf')}" name="cpf" inputmode="numeric" placeholder="000.000.000-00" autocomplete="off" value="${esc(f.cpf)}"></label>
-          <label class="f"><span>Data de nascimento</span><input class="${cl('nascimento')}" name="nascimento" inputmode="numeric" placeholder="DD/MM/AAAA" autocomplete="off" value="${esc(f.nascimento)}"></label>
           <label class="f"><span>Telefone (WhatsApp) <em>*</em></span><input class="input" name="telefone" inputmode="tel" placeholder="(17) 91234-5678" autocomplete="off" value="${esc(f.telefone)}"></label>
-          <label class="f"><span>E-mail</span><input class="input" name="email" type="email" inputmode="email" placeholder="cliente@email.com" autocomplete="off" value="${esc(f.email)}"></label>
-          <label class="f"><span>Nº de registro da CNH</span><input class="${cl('registro')}" name="registro" inputmode="numeric" maxlength="11" autocomplete="off" value="${esc(f.registro)}"></label>
-          <label class="f"><span>Categoria da CNH <em>*</em></span><select class="${cl('categoria')}" name="categoria"><option value="">Selecione…</option>${CATS_TODAS.map((c) => `<option value="${c}" ${f.categoria === c ? 'selected' : ''}>${c}${CATS_MOTO.includes(c) ? '' : ' (não habilita moto)'}</option>`).join('')}</select></label>
-          <label class="f"><span>Validade da CNH <em>*</em></span><input class="${cl('validade')}" name="validade" inputmode="numeric" placeholder="DD/MM/AAAA" autocomplete="off" value="${esc(f.validade)}"></label>
-          <label class="f"><span>Responsável</span><input class="input" value="${esc(S.me.nome)}" disabled></label>
         </div>
+
+        <div id="resumo-cnh"></div>
+        <div id="extra" class="hidden">
+          <div class="form-grid cols-2" style="margin-top:4px">
+            <label class="f"><span>Categoria da CNH</span><select class="${cl('categoria')}" name="categoria"><option value="">Não informada</option>${CATS_TODAS.map((c) => `<option value="${c}" ${f.categoria === c ? 'selected' : ''}>${c}${CATS_MOTO.includes(c) ? '' : ' (não habilita moto)'}</option>`).join('')}</select></label>
+            <label class="f"><span>Validade da CNH</span><input class="${cl('validade')}" name="validade" inputmode="numeric" placeholder="DD/MM/AAAA" autocomplete="off" value="${esc(f.validade)}"></label>
+            <label class="f"><span>Nº de registro da CNH</span><input class="${cl('registro')}" name="registro" inputmode="numeric" maxlength="11" autocomplete="off" value="${esc(f.registro)}"></label>
+            <label class="f"><span>Data de nascimento</span><input class="${cl('nascimento')}" name="nascimento" inputmode="numeric" placeholder="DD/MM/AAAA" autocomplete="off" value="${esc(f.nascimento)}"></label>
+            <label class="f" style="grid-column:1/-1"><span>E-mail (opcional)</span><input class="input" name="email" type="email" inputmode="email" placeholder="cliente@email.com" autocomplete="off" value="${esc(f.email)}"></label>
+          </div>
+        </div>
+
         <div class="actions" style="justify-content:space-between"><button type="button" class="btn" data-voltar>${I.back} Voltar</button><button class="btn primary" type="submit">Continuar ${I.next}</button></div>
       </form></div>`;
     const form = $('#f-dados');
-    const ler = () => { ['moto_id', 'nome', 'cpf', 'telefone', 'email', 'nascimento', 'registro', 'categoria', 'validade'].forEach((k) => { f[k] = form[k].value.trim(); }); };
+    const campos = ['moto_id', 'nome', 'cpf', 'telefone', 'email', 'nascimento', 'registro', 'categoria', 'validade'];
+    const ler = () => campos.forEach((k) => { f[k] = form[k].value.trim(); });
+
+    // Resumo do que veio da CNH — o vendedor só abre se precisar corrigir
+    const pintarResumo = () => {
+      const aberto = !$('#extra').classList.contains('hidden');
+      const temCat = !!f.categoria, temVal = !!brParaISO(f.validade);
+      const txt = temCat && temVal
+        ? `CNH: categoria <b>${esc(f.categoria)}</b> · válida até <b>${esc(f.validade)}</b>`
+        : temCat || temVal
+          ? `CNH: ${temCat ? 'categoria <b>' + esc(f.categoria) + '</b>' : 'validade <b>' + esc(f.validade) + '</b>'} — o resto não foi lido`
+          : 'Categoria e validade não foram lidas da foto. A foto fica guardada no atendimento.';
+      $('#resumo-cnh').innerHTML = `<div class="banner ${temCat && temVal ? 'ok' : 'warn'}" style="justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:10px">${temCat && temVal ? I.check : I.alert}<div>${txt}</div></div>
+        <button type="button" class="btn sm" data-extra>${aberto ? 'Ocultar' : 'Corrigir'}</button></div>`;
+      on($('#resumo-cnh'), '[data-extra]', 'click', () => { $('#extra').classList.toggle('hidden'); pintarResumo(); });
+    };
     const avisar = () => {
       const erros = situacaoCNH(f);
       $('#avisos').innerHTML = erros.map((e) => `<div class="banner bad" style="margin-bottom:8px">${I.alert}<div><b>Não é possível continuar.</b> ${esc(e)}</div></div>`).join('');
       $('button[type=submit]', form).disabled = erros.length > 0;
+      pintarResumo();
     };
     form.cpf.addEventListener('input', (e) => { e.target.value = maskCPF(e.target.value); });
     form.telefone.addEventListener('input', (e) => { e.target.value = maskFone(e.target.value); });
@@ -1023,11 +1044,10 @@
       if (!f.moto_id) return erro('moto_id', 'Selecione a moto do test ride.');
       if (f.nome.split(/\s+/).length < 2) return erro('nome', 'Informe o nome completo do cliente.');
       if (!validaCPF(f.cpf)) return erro('cpf', 'CPF inválido.');
-      if (f.nascimento && (!brParaISO(f.nascimento) || brParaISO(f.nascimento) >= hojeLocal())) return erro('nascimento', 'Data de nascimento inválida.');
       if (digitos(f.telefone).length < 10) return erro('telefone', 'Telefone inválido. Informe DDD e número.');
       if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) return erro('email', 'E-mail inválido.');
-      if (!f.categoria) return erro('categoria', 'Selecione a categoria da CNH.');
-      if (!brParaISO(f.validade)) return erro('validade', 'Informe a validade da CNH (DD/MM/AAAA).');
+      if (f.nascimento && (!brParaISO(f.nascimento) || brParaISO(f.nascimento) >= hojeLocal())) return erro('nascimento', 'Data de nascimento inválida.');
+      if (f.validade && !brParaISO(f.validade)) return erro('validade', 'Validade da CNH inválida (DD/MM/AAAA).');
       if (situacaoCNH(f).length) return avisar();
       irPasso(3);
     });
@@ -1043,7 +1063,7 @@
       moto_id: m?.id || null, moto_modelo: m?.modelo || '', moto_placa: m?.placa || null,
       cliente_nome: f.nome, cliente_cpf: f.cpf, cliente_telefone: f.telefone, cliente_email: f.email || null,
       cliente_nascimento: brParaISO(f.nascimento) || null, cnh_numero: f.registro || null,
-      cnh_categoria: f.categoria, cnh_validade: brParaISO(f.validade),
+      cnh_categoria: f.categoria || null, cnh_validade: brParaISO(f.validade) || null,
       tempo_max_min: W.tempo, limite_percurso: W.limite,
     };
   }
@@ -1054,7 +1074,7 @@
     view().innerHTML = `<div class="page" style="max-width:720px">${cabecalhoPassos()}
       <div class="card stack">
         <div><h1>Termo de responsabilidade</h1><small>Apresente o termo ao cliente antes de coletar as assinaturas.</small></div>
-        <dl class="dl">${linha('Condutor', r.cliente_nome)}${linha('CPF', r.cliente_cpf)}${linha('CNH', `Categoria ${r.cnh_categoria} · válida até ${W.f.validade}`)}${linha('Moto', r.moto_modelo + (r.moto_placa ? ' · ' + r.moto_placa : ''))}${linha('Loja', `${r.loja_nome} · ${r.cidade}`)}${linha('Responsável', r.vendedor_nome)}</dl>
+        <dl class="dl">${linha('Condutor', r.cliente_nome)}${linha('CPF', r.cliente_cpf)}${linha('CNH', r.cnh_categoria || r.cnh_validade ? `${r.cnh_categoria ? 'Categoria ' + r.cnh_categoria : 'Categoria não informada'}${W.f.validade ? ' · válida até ' + W.f.validade : ''}` : 'Foto anexada ao atendimento')}${linha('Moto', r.moto_modelo + (r.moto_placa ? ' · ' + r.moto_placa : ''))}${linha('Loja', `${r.loja_nome} · ${r.cidade}`)}${linha('Responsável', r.vendedor_nome)}</dl>
         <div class="form-grid cols-2">
           <label class="f"><span>Tempo máximo (minutos)</span><input class="input" type="number" id="tempo" min="5" max="120" inputmode="numeric" value="${r.tempo_max_min}"></label>
           <label class="f"><span>Limite do percurso</span><input class="input" id="limite" maxlength="160" value="${esc(r.limite_percurso)}"></label>
@@ -1395,44 +1415,42 @@
     view().innerHTML = `<div class="page" style="max-width:760px"><h1 style="margin-bottom:16px">Minha conta</h1>
       <div class="card"><div class="list-row" style="border:0"><span class="avatar" style="width:48px;height:48px;font-size:16px">${esc(iniciais(me.nome))}</span>
         <div class="grow"><h2>${esc(me.nome)}</h2><small>${esc(me.usuario || me.email)} · ${esc(PERFIS[me.perfil])}</small></div></div>
-        <div class="actions" style="margin-top:8px"><button class="btn" data-senha>Trocar senha</button><button class="btn danger" data-sair3>Sair</button></div></div>
+        <div class="actions" style="margin-top:8px"><button class="btn" data-senha>Trocar PIN</button><button class="btn danger" data-sair3>Sair</button></div></div>
       ${instalado ? '' : `<div class="card"><h2 style="margin-bottom:8px">Instalar no celular</h2>
         ${S.instalar ? '<button class="btn primary" data-instalar>Instalar aplicativo</button>'
           : ios ? '<p class="muted" style="margin:0">No Safari, toque em <b>Compartilhar</b> e depois em <b>Adicionar à Tela de Início</b>.</p>'
           : '<p class="muted" style="margin:0">No Chrome, abra o menu ⋮ e toque em <b>Instalar app</b> ou <b>Adicionar à tela inicial</b>.</p>'}</div>`}
-      <div class="card"><h2 style="margin-bottom:8px">Segurança</h2><p class="muted" style="margin:0">Sua sessão é encerrada após ${C.INATIVIDADE_MIN || 60} minutos sem uso. Não compartilhe sua senha; cada acesso fica registrado.</p></div></div>`;
+      <div class="card"><h2 style="margin-bottom:8px">Segurança</h2><p class="muted" style="margin:0">Sua sessão é encerrada após ${C.INATIVIDADE_MIN || 60} minutos sem uso. Não compartilhe seu PIN; cada acesso fica registrado.</p></div></div>`;
     on(view(), '[data-senha]', 'click', () => telaTrocarSenha(false));
     on(view(), '[data-sair3]', 'click', sair);
     on(view(), '[data-instalar]', 'click', async () => { S.instalar.prompt(); await S.instalar.userChoice; S.instalar = null; telaConta(); });
   }
 
   // ------------------------------------------------------------------ administração: usuários
-  function novaSenha() {
-    const letras = 'abcdefghjkmnpqrstuvwxyz', nums = '23456789';
-    const b = new Uint32Array(8); crypto.getRandomValues(b);
-    let s = ''; for (let i = 0; i < 4; i++) s += letras[b[i] % letras.length];
-    for (let i = 4; i < 8; i++) s += nums[b[i] % nums.length];
-    return s;
+  // PIN de 6 números: é o que a pessoa digita para entrar, no teclado numérico.
+  function novoPin() {
+    const b = new Uint32Array(6); crypto.getRandomValues(b);
+    return Array.from(b, (n) => n % 10).join('');
   }
 
   function mostrarAcesso(nome, usuario, senha) {
     const m = modal(`<h2>Acesso de ${esc(nome)}</h2><p class="muted" style="margin:0">Passe estes dados para a pessoa.</p>
       <div class="form-grid cols-2" style="margin-top:12px">
         <div><small class="muted">Usuário</small><div class="secret" style="font-size:20px;letter-spacing:0">${esc(usuario)}</div></div>
-        <div><small class="muted">Senha</small><div class="secret" style="font-size:20px">${esc(senha)}</div></div>
+        <div><small class="muted">PIN</small><div class="secret" style="font-size:20px;letter-spacing:3px">${esc(senha)}</div></div>
       </div>
       <div class="actions"><button class="btn" data-copiar>${I.copy} Copiar</button><button class="btn primary" data-fechar>Pronto</button></div>`);
     $('[data-copiar]', m.el).addEventListener('click', async () => {
-      const t = `Olá, ${nome}! Seu acesso ao ${NOME_APP}:\n${location.origin + location.pathname}\nUsuário: ${usuario}\nSenha: ${senha}`;
+      const t = `Olá, ${nome}! Seu acesso ao ${NOME_APP}:\n${location.origin + location.pathname}\nUsuário: ${usuario}\nPIN: ${senha}`;
       try { await navigator.clipboard.writeText(t); toast('Dados copiados.'); } catch (_) { toast('Não foi possível copiar.', true); }
     });
   }
 
-  function campoSenha(valor) {
-    return `<label class="f"><span>Senha <em>*</em></span>
-      <div style="display:flex;gap:8px"><input class="input" name="senha" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(valor)}" style="flex:1">
+  function campoPin(valor) {
+    return `<label class="f"><span>PIN <em>*</em></span>
+      <div style="display:flex;gap:8px"><input class="input" name="senha" type="text" inputmode="numeric" maxlength="6" autocomplete="off" value="${esc(valor)}" style="flex:1;font-size:20px;letter-spacing:4px">
       <button type="button" class="btn" data-gerar>Gerar</button></div>
-      <div class="hint">Mínimo de 6 caracteres. Fica visível para você anotar e passar à pessoa.</div></label>`;
+      <div class="hint">6 números. Fica visível para você anotar e passar à pessoa.</div></label>`;
   }
 
   function formUsuario(u) {
@@ -1447,14 +1465,14 @@
             <div class="hint">${novo ? 'Só letras e números, sem espaços. Ex.: carla' : 'O login não muda depois de criado.'}</div></label>
           <label class="f"><span>Perfil</span><select class="input" name="perfil">${Object.entries(PERFIS).map(([k, l]) => `<option value="${k}" ${d.perfil === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
-        ${novo ? campoSenha(novaSenha()) : ''}
-        ${novo ? '<label class="check"><input type="checkbox" name="trocar"> Pedir que a pessoa crie uma nova senha no primeiro acesso</label>' : ''}
+        ${novo ? campoPin(novoPin()) : ''}
+        ${novo ? '<label class="check"><input type="checkbox" name="trocar"> Pedir que a pessoa troque o PIN no primeiro acesso</label>' : ''}
         <div class="hint" style="margin-top:-4px">Vendedor: registra e vê os próprios test rides. Gestor: vê todos da loja, cadastra motos, exporta e cancela. Master: tudo, inclusive usuários.</div>
         <div class="f"><span style="display:block;font-size:13px;font-weight:600;margin-bottom:8px">Lojas que pode acessar</span>
           <label class="check"><input type="checkbox" name="todas_lojas" ${d.todas_lojas ? 'checked' : ''}> Todas as lojas</label>
           <div id="lista-lj" class="perm-grid ${d.todas_lojas ? 'hidden' : ''}">${S.lojas.filter((x) => x.ativo || (d.lojas || []).includes(x.id)).map((x) => `<label class="check"><input type="checkbox" name="lj" value="${x.id}" ${(d.lojas || []).includes(x.id) ? 'checked' : ''}> ${esc(x.nome)}</label>`).join('')}</div></div>
         ${novo ? '' : `<div class="card" style="background:var(--surface-2);box-shadow:none"><div class="actions">
-          <button type="button" class="btn sm" data-reset>Trocar a senha</button>
+          <button type="button" class="btn sm" data-reset>Trocar o PIN</button>
           ${u.id !== S.me.id ? `<button type="button" class="btn sm ${u.ativo ? 'danger' : ''}" data-ativo>${u.ativo ? 'Desativar acesso' : 'Reativar acesso'}</button>` : ''}</div>
           <small class="muted">Último acesso: ${fmtDH(u.ultimo_acesso)}</small></div>`}
         <div class="actions"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn primary" type="submit">${novo ? 'Criar acesso' : 'Salvar'}</button></div>
@@ -1462,7 +1480,7 @@
     const f = $('#f-user', m.el);
     f.todas_lojas.addEventListener('change', () => $('#lista-lj', f).classList.toggle('hidden', f.todas_lojas.checked));
     if (novo) {
-      on(f, '[data-gerar]', 'click', () => { f.senha.value = novaSenha(); });
+      on(f, '[data-gerar]', 'click', () => { f.senha.value = novoPin(); });
       f.nome.addEventListener('input', () => { if (!f.usuario.dataset.tocado) f.usuario.value = sugerirUsuario(f.nome.value); });
       f.usuario.addEventListener('input', (e) => { e.target.dataset.tocado = '1'; e.target.value = semAcento(e.target.value).toLowerCase().replace(/[^a-z0-9._-]/g, ''); });
     }
@@ -1472,7 +1490,7 @@
         todas_lojas: f.todas_lojas.checked, lojas: $$('input[name=lj]:checked', f).map((x) => x.value) };
       if (corpo.nome.split(/\s+/).length < 2) return toast('Informe nome e sobrenome.', true);
       if (novo && !/^[a-z0-9][a-z0-9._-]{2,19}$/.test(corpo.usuario)) return toast('Usuário inválido. Use de 3 a 20 letras ou números, sem espaços.', true);
-      if (novo && f.senha.value.trim().length < 6) return toast('A senha precisa ter pelo menos 6 caracteres.', true);
+      if (novo && !/^\d{6}$/.test(f.senha.value.trim())) return toast('O PIN precisa ter 6 números.', true);
       if (!corpo.todas_lojas && !corpo.lojas.length && corpo.perfil !== 'master') return toast('Selecione ao menos uma loja.', true);
       if (!novo && u.id === S.me.id && corpo.perfil !== 'master') return toast('Você não pode remover seu próprio perfil Master.', true);
       const solta = travar($('button[type=submit]', f), 'Salvando…');
@@ -1493,16 +1511,16 @@
     });
     if (!novo) {
       on(f, '[data-reset]', 'click', () => {
-        const ms = modal(`<h2>Trocar a senha de ${esc(u.nome)}</h2><form id="f-senha2" class="form-grid" novalidate>
-          ${campoSenha(novaSenha())}
-          <label class="check"><input type="checkbox" name="trocar"> Pedir que a pessoa crie uma nova senha no primeiro acesso</label>
-          <div class="actions"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn primary" type="submit">Salvar senha</button></div></form>`);
+        const ms = modal(`<h2>Trocar o PIN de ${esc(u.nome)}</h2><form id="f-senha2" class="form-grid" novalidate>
+          ${campoPin(novoPin())}
+          <label class="check"><input type="checkbox" name="trocar"> Pedir que a pessoa troque o PIN no primeiro acesso</label>
+          <div class="actions"><button type="button" class="btn" data-fechar>Cancelar</button><button class="btn primary" type="submit">Salvar PIN</button></div></form>`);
         const f2 = $('#f-senha2', ms.el);
-        on(ms.el, '[data-gerar]', 'click', () => { f2.senha.value = novaSenha(); });
+        on(ms.el, '[data-gerar]', 'click', () => { f2.senha.value = novoPin(); });
         f2.addEventListener('submit', async (ev) => {
           ev.preventDefault();
           const senha = f2.senha.value.trim();
-          if (senha.length < 6) return toast('A senha precisa ter pelo menos 6 caracteres.', true);
+          if (!/^\d{6}$/.test(senha)) return toast('O PIN precisa ter 6 números.', true);
           const solta = travar($('button[type=submit]', f2), 'Salvando…');
           try {
             await invocar('admin-usuarios', { acao: 'redefinir_senha', id: u.id, senha, trocar_senha: f2.trocar.checked });

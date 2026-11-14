@@ -6,7 +6,7 @@ Sistema independente (não usa o banco do CRM). Mesmo modelo do RH Grupo Nogueir
 
 ## Fluxo do atendimento
 1. **CNH** — foto; os dados são lidos no próprio celular (OCR) e preenchidos. PDF é aceito, com preenchimento manual.
-2. **Dados** — o vendedor confere, escolhe a moto e informa o telefone. Bloqueia CNH vencida ou sem categoria A.
+2. **Dados** — só moto, nome, CPF e telefone. Categoria e validade vêm da foto; quando lidas, bloqueiam CNH vencida ou sem categoria A.
 3. **Termo** — texto completo na tela, tempo máximo e limite do percurso.
 4. **Assinaturas** — cliente e responsável assinam com o dedo.
 5. **Pronto** — WhatsApp em um toque, ver, baixar ou compartilhar o PDF.
@@ -14,7 +14,7 @@ Sistema independente (não usa o banco do CRM). Mesmo modelo do RH Grupo Nogueir
 ## Perfis
 - **Vendedor:** registra e vê os próprios test rides.
 
-O Master cadastra cada pessoa com nome, usuário e senha — sem e-mail.
+O Master cadastra cada pessoa com nome, usuário e um PIN de 6 números — sem e-mail e sem senha longa.
 - **Gestor:** vê todos da(s) sua(s) loja(s), cadastra motos, exporta Excel e cancela.
 - **Master:** tudo, mais usuários, lojas, configurações e auditoria.
 

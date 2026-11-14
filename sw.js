@@ -1,5 +1,5 @@
 // Service worker — guarda só a interface (nunca dados de clientes).
-const VERSAO = 'trb-v5';
+const VERSAO = 'trb-v6';
 const CACHE_OCR = 'trb-leitura'; // arquivos da leitura da CNH: pesados e sempre iguais, nunca apagados
 
 // Interface do app: baixada na instalação.
@@ -11,7 +11,6 @@ const ARQUIVOS = [
 ];
 
 const ehLeitura = (url) => url.pathname.includes('/vendor/tesseract/');
-const ehEstatico = (url) => /\.(css|js|png|ico|webmanifest|wasm|gz|traineddata)$/.test(url.pathname);
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -46,19 +45,12 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // Interface: responde na hora com o que está no aparelho e busca a versão nova em segundo plano
-  if (ehEstatico(url)) {
-    e.respondWith(
-      caches.match(req).then((guardado) => {
-        const rede = daRede(req, VERSAO).catch(() => guardado);
-        return guardado || rede;
-      }),
-    );
-    return;
-  }
-
-  // Página: rede primeiro, cache como reserva quando estiver sem sinal
+  // Interface e página: respondem na hora com o que já está no aparelho e buscam a
+  // versão nova em segundo plano. É o que faz o app abrir sem esperar a rede.
   e.respondWith(
-    daRede(req, VERSAO).catch(() => caches.match(req).then((r) => r || caches.match('./index.html'))),
+    caches.match(req).then((guardado) => {
+      const rede = daRede(req, VERSAO).catch(() => guardado || caches.match('./index.html'));
+      return guardado || rede;
+    }),
   );
 });
