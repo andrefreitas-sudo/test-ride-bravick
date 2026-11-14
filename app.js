@@ -243,12 +243,20 @@
         <div class="card form-grid">
           ${msg ? `<div class="chip warn plain" style="white-space:normal">${esc(msg)}</div>` : ''}
           <label class="f"><span>Usuário</span><input class="input" type="text" name="usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
-          <label class="f"><span>PIN</span><input class="input" type="password" name="senha" inputmode="numeric" autocomplete="current-password" required></label>
+          <label class="f"><span>PIN</span>
+            <div style="display:flex;gap:8px"><input class="input" type="password" name="senha" inputmode="numeric" autocomplete="current-password" required style="flex:1">
+            <button type="button" class="btn" data-abc title="Trocar o teclado">ABC</button></div></label>
           <button class="btn primary block" type="submit">Entrar</button>
           <small class="muted" style="text-align:center">Esqueceu a senha? Fale com o administrador do sistema.</small>
         </div>
       </form></div>`;
     const f = $('#f-login');
+    on(f, '[data-abc]', 'click', (e) => {
+      const letras = f.senha.inputMode !== 'numeric';
+      f.senha.inputMode = letras ? 'numeric' : 'text';
+      e.currentTarget.textContent = letras ? 'ABC' : '123';
+      f.senha.blur(); f.senha.focus();
+    });
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const entrada = f.usuario.value.trim(), senha = f.senha.value;
